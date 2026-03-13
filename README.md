@@ -8,6 +8,10 @@ A browser-based UI for synchronized multi-camera recording with Intel RealSense 
 - Linux (Ubuntu 22.04+ recommended)
 - Intel RealSense D400-series camera(s)
 - Conda (Miniconda or Anaconda)
+    - if not installed run `miniconda_installation.sh`
+    ```
+    source miniconda installation.sh
+    ```
 - `ffmpeg` (installed by `setup.sh`)
 ---
 ## Installation
