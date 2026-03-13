@@ -1,5 +1,5 @@
 # RealSense Capture Studio
-
+![preview](./assets/preview.png)
 A browser-based UI for synchronized multi-camera recording with Intel RealSense depth cameras. Live previews stream to your browser, recordings are saved as .bag files, and a utility script converts them to colorized depth MP4 videos.
 
 ---
