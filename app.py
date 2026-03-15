@@ -1,40 +1,21 @@
 """
-RealSense Capture Server — frame-perfect recording build
-=========================================================
+RealSense Capture Server — updated to match new index.html
+===========================================================
 
-Key design decisions
---------------------
-1.  Recording thread does ONE thing: call cam.grab_frame() as fast as possible
-    and push raw numpy arrays into a bounded queue.  No JPEG encoding, no locks
-    on the hot path.
-
-2.  A dedicated JPEG-encoder thread drains that queue and writes to the shared
-    frame slot.  The MJPEG streamer only touches the frame slot, never the
-    recording pipeline.
-
-3.  Preview pipeline is stopped *and confirmed dead* before the recording
-    pipeline opens the device — no fixed sleeps, no races.
-
-4.  Recording pipeline is opened during warmup (before the GO signal), so the
-    device is already streaming and the hardware FIFO is fresh when recording
-    starts.
-
-5.  Frame-drop counting: any grab_frame() timeout increments a counter that is
-    exposed on /api/status so the UI can surface it.
-
-6.  The preview worker never sleeps after wait_for_frames(); it only throttles
-    by skipping every other frame.  The old sleep(1/15) was causing the hardware
-    FIFO to back up between calls.
-
-7.  frame slot uses a threading.Event so the MJPEG streamer wakes up
-    immediately on a new frame rather than polling at 20 Hz.
-
-8.  warmup_then_go() waits for every camera pipeline to signal ready before
-    starting the 3-second countdown — so all 3 seconds are pure warmup, not
-    setup time.
+Changes from original:
+- /api/events  — Server-Sent Events endpoint replaces 500 ms status polling.
+                  State is pushed instantly on every transition and every second
+                  for the RAM gauge. The browser never needs to poll.
+- /api/config  — Returns default output directory (~/Documents).
+- output_dir   — start_recording now accepts an optional output_dir in the
+                  request body. Defaults to ~/Documents/DDMMYYYY/<cam>/.
+- rss_bytes    — Status and SSE events include current process RSS memory.
+- Warmup       — 3-second countdown replaced with a 300 ms hardware-FIFO
+                  stabilisation pause. The UI no longer shows a countdown.
+- saved_files  — Each entry now includes a `drops` field.
 """
 
-from flask import Flask, jsonify, request, Response, send_from_directory
+from flask import Flask, jsonify, request, Response, send_from_directory, stream_with_context
 from flask_cors import CORS
 import threading
 import queue
@@ -42,6 +23,8 @@ import time
 import datetime
 import os
 import sys
+import json
+import resource
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -62,16 +45,16 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, static_folder=BASE_DIR, static_url_path='')
 CORS(app)
 
+
 @app.route('/')
 def index():
     return send_from_directory(BASE_DIR, 'index.html')
 
 
 # ─── Per-camera frame slots ───────────────────────────────────────────────────
-# serial -> {"jpeg": bytes | None, "event": threading.Event}
-# Writers call _push_jpeg(); readers call _get_jpeg() or wait on the event.
+
 _cam_frame: dict = {}
-_cam_frame_lock = threading.Lock()   # only for dict structure mutations
+_cam_frame_lock = threading.Lock()
 
 
 def _ensure_frame_slot(serial: str):
@@ -91,37 +74,178 @@ def _get_jpeg(serial: str):
 
 
 # ─── Preview pipeline registry ────────────────────────────────────────────────
+
 _preview_threads:      dict = {}
 _preview_stop_events:  dict = {}
 _preview_registry_lock = threading.Lock()
 
 # ─── Global recording state ───────────────────────────────────────────────────
+
 state = {
-    "cameras":      {},    # cam_id -> {name, serial, recording, bag_path, drops}
+    "cameras":      {},
     "recording":    False,
     "stop_event":   None,
     "start_event":  None,
-    "ready_events": {},    # serial -> Event; set when pipeline is streaming
+    "ready_events": {},
     "saved_files":  [],
-    "status":       "idle",  # idle | warming | recording | saving | done
+    "status":       "idle",   # idle | warming | recording | saving | done
 }
 state_lock = threading.Lock()
 
 
+# ─── SSE broadcaster ──────────────────────────────────────────────────────────
+# All connected /api/events clients receive a pushed JSON event on every
+# state change. The UI never polls /api/status; it only consumes SSE.
+
+_sse_clients:     list  = []
+_sse_clients_lock = threading.Lock()
+
+
+def _sse_subscribe() -> queue.Queue:
+    q = queue.Queue(maxsize=16)
+    with _sse_clients_lock:
+        _sse_clients.append(q)
+    return q
+
+
+def _sse_unsubscribe(q: queue.Queue):
+    with _sse_clients_lock:
+        try:
+            _sse_clients.remove(q)
+        except ValueError:
+            pass
+
+
+def _get_rss_bytes() -> int:
+    """Return process RSS in bytes. Uses /proc/self/status on Linux."""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    kb = int(line.split()[1])
+                    return kb * 1024
+    except Exception:
+        pass
+    # Fallback: getrusage (returns KB on Linux, bytes on macOS)
+    try:
+        ru = resource.getrusage(resource.RUSAGE_SELF)
+        return ru.ru_maxrss * 1024  # Linux reports in KB
+    except Exception:
+        return 0
+
+
+def _build_state_payload() -> dict:
+    """Serialise current state + RSS into the SSE event payload."""
+    with state_lock:
+        cameras_out = {
+            k: {
+                "name":      v["name"],
+                "serial":    v["serial"],
+                "recording": v.get("recording", False),
+                "drops":     v.get("drops", 0),
+            }
+            for k, v in state["cameras"].items()
+        }
+        return {
+            "status":      state["status"],
+            "recording":   state["recording"],
+            "saved_files": state["saved_files"],
+            "cameras":     cameras_out,
+            "rss_bytes":   _get_rss_bytes(),
+        }
+
+
+def _push_state():
+    """Broadcast current state to all SSE clients."""
+    payload = _build_state_payload()
+    msg = "data: " + json.dumps(payload) + "\n\n"
+    msg_bytes = msg.encode()
+    with _sse_clients_lock:
+        dead = []
+        for q in _sse_clients:
+            try:
+                q.put_nowait(msg_bytes)
+            except queue.Full:
+                dead.append(q)
+        for q in dead:
+            try:
+                _sse_clients.remove(q)
+            except ValueError:
+                pass
+
+
+def _rss_poller():
+    """Push an SSE event every second so the RAM gauge updates in real time."""
+    while True:
+        time.sleep(1)
+        _push_state()
+
+
+threading.Thread(target=_rss_poller, daemon=True, name="rss-poller").start()
+
+
+@app.route("/api/events")
+def sse_events():
+    """
+    Server-Sent Events stream. The browser connects once and receives pushed
+    JSON state on every transition. Keepalive comments are sent every 15s.
+    """
+    q = _sse_subscribe()
+
+    # Send current state immediately on connect.
+    _push_state()
+
+    def generate():
+        try:
+            while True:
+                try:
+                    msg = q.get(timeout=15)
+                    yield msg
+                except queue.Empty:
+                    # Keepalive — prevents proxies from closing the connection.
+                    yield b": keepalive\n\n"
+        except GeneratorExit:
+            pass
+        finally:
+            _sse_unsubscribe(q)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control":    "no-cache",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
+
+# ─── Config ───────────────────────────────────────────────────────────────────
+
+def _default_output_dir() -> str:
+    home = os.path.expanduser("~")
+    return os.path.join(home, "Documents")
+
+
+def _resolve_output_dir(raw: str) -> str:
+    """Expand ~ and clean the path. Empty → ~/Documents."""
+    if not raw or not raw.strip():
+        return _default_output_dir()
+    return os.path.normpath(os.path.expanduser(raw.strip()))
+
+
+@app.route("/api/config", methods=["GET"])
+def get_config():
+    return jsonify({"default_output_dir": _default_output_dir()})
+
+
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def get_dated_dir() -> str:
-    today = datetime.datetime.now().strftime("%d%m%Y")
-    path  = os.path.join("recordings", today)
-    os.makedirs(path, exist_ok=True)
-    return path
-
-
-def bag_filename(cam_name: str) -> str:
-    now     = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    cam_dir = os.path.join(get_dated_dir(), cam_name)
+def bag_filename(output_dir: str, cam_name: str) -> str:
+    today   = datetime.datetime.now().strftime("%d%m%Y")
+    ts      = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    cam_dir = os.path.join(output_dir, today, cam_name)
     os.makedirs(cam_dir, exist_ok=True)
-    return os.path.join(cam_dir, f"{cam_name}_{now}.bag")
+    return os.path.join(cam_dir, f"{cam_name}_{ts}.bag")
 
 
 def _bgr_to_jpeg(img: np.ndarray, quality: int = 75) -> bytes:
@@ -133,9 +257,8 @@ def _bgr_to_jpeg(img: np.ndarray, quality: int = 75) -> bytes:
 
 def _preview_worker(serial: str, stop_event: threading.Event):
     """
-    Runs at the camera's native 30 fps cadence — no artificial sleep.
-    Encodes every other frame (~15 fps to browser) to keep CPU low without
-    adding latency.
+    Idle preview: runs at the camera's native 30fps cadence.
+    Encodes every other frame (~15fps to browser) to keep CPU low.
     """
     pipeline = rs.pipeline()
     cfg      = rs.config()
@@ -156,7 +279,7 @@ def _preview_worker(serial: str, stop_event: threading.Event):
                     break
                 continue
 
-            skip = not skip          # encode every other frame → ~15 fps output
+            skip = not skip
             if skip:
                 continue
 
@@ -194,14 +317,9 @@ def _start_preview(serial: str):
 
 
 def _stop_preview(serial: str, timeout: float = 6.0) -> bool:
-    """
-    Signal the preview thread to stop and block until it exits.
-    Returns True if the thread exited cleanly within timeout.
-    """
     with _preview_registry_lock:
         ev = _preview_stop_events.pop(serial, None)
         t  = _preview_threads.pop(serial, None)
-
     if ev:
         ev.set()
     if t and t.is_alive():
@@ -216,18 +334,13 @@ def _stop_preview(serial: str, timeout: float = 6.0) -> bool:
 
 def _jpeg_encoder_worker(serial: str, raw_q: queue.Queue,
                          stop_event: threading.Event):
-    """
-    Drains raw BGR numpy frames from raw_q, encodes to JPEG, and pushes to the
-    shared frame slot.  Runs in its own thread so the recording grab loop is
-    never stalled by cv2.imencode().
-    """
     _ensure_frame_slot(serial)
     while not stop_event.is_set() or not raw_q.empty():
         try:
             img = raw_q.get(timeout=0.2)
         except queue.Empty:
             continue
-        jpeg = _bgr_to_jpeg(img, quality=70)   # slightly lower quality = faster encode
+        jpeg = _bgr_to_jpeg(img, quality=70)
         _push_jpeg(serial, jpeg)
 
 
@@ -237,30 +350,16 @@ def camera_worker(serial: str, user_name: str,
                   bag_path: str, cam_id: str,
                   ready_event: threading.Event):
     """
-    Phase 1 — SETUP (runs immediately, in parallel with other cameras):
-        • Stop preview pipeline and confirm it has exited.
-        • Open the recording pipeline (Camera.start).
-        • Signal ready_event so warmup_then_go() knows this camera is live.
-
-    Phase 2 — WAIT (inside warmup window):
-        • Sit idle while other cameras finish setup and countdown runs.
-        • The pipeline is already streaming so the hardware FIFO is fresh.
-
-    Phase 3 — RECORD (after GO signal from start_event):
-        • Grab frames at 200 ms timeout — tight enough to detect real drops fast.
-        • Push raw BGR arrays to a bounded queue for the encoder thread.
-        • Never block on encoding; drop the preview frame if encoder is behind.
-
-    Phase 4 — TEARDOWN:
-        • Drain encoder, stop Camera cleanly, restart preview pipeline.
+    Phase 1 — Stop preview, open recording pipeline.
+    Phase 2 — Wait for GO signal (300ms hardware stabilisation, no 3s countdown).
+    Phase 3 — Hot record loop: grab frames, push to encoder queue for preview.
+    Phase 4 — Teardown: drain encoder, stop camera, restart preview.
     """
 
-    # ── Phase 1: release preview, open recording pipeline ──────────────────
+    # Phase 1
     clean = _stop_preview(serial, timeout=6.0)
     if not clean:
         print(f"[camera {serial}] preview thread lingered — proceeding anyway")
-
-    # Small yield to let the USB stack release the device handle
     time.sleep(0.3)
 
     cam = Camera(user_name, serial)
@@ -270,25 +369,29 @@ def camera_worker(serial: str, user_name: str,
         print(f"[camera {serial}] FATAL: could not open recording pipeline: {e}")
         with state_lock:
             state["cameras"][cam_id]["recording"] = False
-        ready_event.set()    # unblock warmup even on failure
+        ready_event.set()
         return
 
     with state_lock:
         state["cameras"][cam_id]["camera_obj"] = cam
 
-    print(f"[camera {serial}] recording pipeline open → {bag_path}")
-    ready_event.set()   # signal to warmup_then_go: this camera is ready
+    # Warm-up grab: drains the first frame from the hardware FIFO so the
+    # record loop never hits a timeout on frame 1 (which counted as a drop).
+    try:
+        cam.grab_frame(timeout_ms=1000)
+    except Exception:
+        pass
 
-    # ── Phase 2: wait for GO ────────────────────────────────────────────────
+    print(f"[camera {serial}] pipeline open → {bag_path}")
+    ready_event.set()
+
+    # Phase 2 — wait for GO
     start_event.wait()
-
     with state_lock:
         state["status"] = "recording"
+    _push_state()
 
-    # ── Phase 3: hot record loop ────────────────────────────────────────────
-    # Bounded queue: if the encoder falls more than 8 frames behind, we drop
-    # preview frames — but the .bag file is written by cam.grab_frame() itself
-    # and is never affected.
+    # Phase 3 — record loop
     raw_q: queue.Queue = queue.Queue(maxsize=8)
     encoder_stop = threading.Event()
     enc_thread = threading.Thread(
@@ -309,6 +412,7 @@ def camera_worker(serial: str, user_name: str,
                     state["cameras"][cam_id]["drops"] = drops
                 if drops % 10 == 0:
                     print(f"[camera {serial}] ⚠ {drops} dropped frames")
+                    _push_state()
                 continue
 
             if not frames:
@@ -316,28 +420,30 @@ def camera_worker(serial: str, user_name: str,
 
             color = frames.get_color_frame()
             if color:
-                # .copy() is critical — librealsense recycles the underlying
-                # buffer as soon as we call grab_frame() again
                 img = np.asanyarray(color.get_data()).copy()
                 try:
                     raw_q.put_nowait(img)
                 except queue.Full:
-                    pass   # encoder behind — drop preview frame, not the .bag frame
+                    pass
 
     finally:
-        # ── Phase 4: teardown ───────────────────────────────────────────────
+        # Phase 4 — teardown
         encoder_stop.set()
         enc_thread.join(timeout=3)
+
+        with state_lock:
+            state["cameras"][cam_id]["recording"] = False
+            state["cameras"][cam_id]["drops"]     = drops
+
+        # Signal done BEFORE stopping the camera so the UI updates immediately.
+        # cam.stop() can block for ~500ms–2s while the SDK flushes USB buffers.
+        _push_state()
 
         try:
             cam.stop()
             print(f"[camera {serial}] stopped cleanly. Drops: {drops}")
         except Exception as e:
             print(f"[camera {serial}] stop warning (ignored): {e}")
-
-        with state_lock:
-            state["cameras"][cam_id]["recording"] = False
-            state["cameras"][cam_id]["drops"]     = drops
 
         time.sleep(0.4)
         _start_preview(serial)
@@ -420,16 +526,10 @@ def detect():
 
 @app.route("/api/restart_previews", methods=["POST"])
 def restart_previews():
-    """
-    Tear down every active preview pipeline and restart them all.
-    Called by the frontend's Detect / Re-scan button to recover frozen feeds.
-    Safe to call at any time when NOT recording.
-    """
     with state_lock:
         if state["recording"]:
             return jsonify({"error": "Cannot restart previews while recording"}), 400
 
-    # Collect serials that currently have a live preview thread
     with _preview_registry_lock:
         active_serials = list(_preview_threads.keys())
 
@@ -448,16 +548,13 @@ def restart_previews():
 
 @app.route("/api/stream/<serial>")
 def stream_mjpeg(serial: str):
-    """
-    Event-driven MJPEG stream.  The generator wakes on threading.Event instead
-    of polling at 20 Hz — this halves latency and eliminates the busy-wait.
-    """
+    """Event-driven MJPEG stream. Wakes on threading.Event instead of polling."""
     _ensure_frame_slot(serial)
 
     def generate():
         slot = _cam_frame[serial]
         while True:
-            slot["event"].wait(timeout=1.0)   # wake on new frame; 1 s watchdog
+            slot["event"].wait(timeout=1.0)
             slot["event"].clear()
             jpeg = slot["jpeg"]
             if jpeg:
@@ -471,8 +568,18 @@ def stream_mjpeg(serial: str):
 def start_recording():
     data           = request.json or {}
     cameras_config = data.get("cameras", [])
+    output_dir_raw = data.get("output_dir", "")
+
     if not cameras_config:
         return jsonify({"error": "No cameras configured"}), 400
+
+    output_dir = _resolve_output_dir(output_dir_raw)
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+    except OSError as e:
+        return jsonify({"error": f"Cannot create output directory: {e}"}), 400
+
+    print(f"[record] output directory: {output_dir}")
 
     with state_lock:
         if state["recording"]:
@@ -490,14 +597,16 @@ def start_recording():
             "cameras":      {},
         })
 
+    _push_state()
+
     threads   = []
     bag_paths = {}
 
     for cfg in cameras_config:
         serial    = cfg["serial"]
-        user_name = cfg["user_name"].strip() or f"cam_{serial[-4:]}"
+        user_name = cfg.get("user_name", "").strip() or f"cam_{serial[-4:]}"
         cam_id    = f"cam_{serial}"
-        bag_path  = bag_filename(user_name)
+        bag_path  = bag_filename(output_dir, user_name)
         bag_paths[cam_id] = bag_path
 
         ready_ev = threading.Event()
@@ -531,8 +640,8 @@ def start_recording():
 
     def warmup_then_go():
         """
-        Wait for every camera pipeline to signal ready, THEN start the 3-second
-        countdown.  Max 10 s to open all pipelines before proceeding anyway.
+        Wait for every camera to signal ready, then a brief 300ms hardware
+        stabilisation pause — no 3-second countdown.
         """
         deadline = time.time() + 10.0
         for serial, rev in ready_events.items():
@@ -540,11 +649,12 @@ def start_recording():
             if not rev.wait(timeout=remaining):
                 print(f"[warmup] WARNING: {serial} did not signal ready in time")
 
-        print("[warmup] all cameras ready — counting down 3 s")
-        time.sleep(3)
+        print("[warmup] all cameras ready — starting")
+        time.sleep(0.3)
         start_event.set()
         with state_lock:
             state["status"] = "recording"
+        _push_state()
 
     threading.Thread(target=warmup_then_go, daemon=True, name="warmup").start()
     return jsonify({"ok": True, "status": "warming", "bag_paths": bag_paths})
@@ -558,13 +668,18 @@ def stop_recording():
         stop_event      = state["stop_event"]
         state["status"] = "saving"
 
+    _push_state()
     stop_event.set()
 
     def finalize():
         for t in state.get("threads", []):
             t.join(timeout=20)
         saved = [
-            {"name": v["name"], "bag_path": v["bag_path"], "drops": v.get("drops", 0)}
+            {
+                "name":     v["name"],
+                "bag_path": v["bag_path"],
+                "drops":    v.get("drops", 0),
+            }
             for v in state["cameras"].values()
         ]
         with state_lock:
@@ -573,6 +688,7 @@ def stop_recording():
             state["status"]      = "done"
         total_drops = sum(s["drops"] for s in saved)
         print(f"[finalize] done — total dropped frames: {total_drops}")
+        _push_state()
 
     threading.Thread(target=finalize, daemon=True, name="finalize").start()
     return jsonify({"ok": True, "status": "saving"})
@@ -580,22 +696,8 @@ def stop_recording():
 
 @app.route("/api/status", methods=["GET"])
 def get_status():
-    with state_lock:
-        cameras_out = {
-            k: {
-                "name":      v["name"],
-                "serial":    v["serial"],
-                "recording": v.get("recording", False),
-                "drops":     v.get("drops", 0),
-            }
-            for k, v in state["cameras"].items()
-        }
-        return jsonify({
-            "status":      state["status"],
-            "recording":   state["recording"],
-            "saved_files": state["saved_files"],
-            "cameras":     cameras_out,
-        })
+    """Legacy polling endpoint — still available but the UI uses /api/events."""
+    return jsonify(_build_state_payload())
 
 
 if __name__ == "__main__":
