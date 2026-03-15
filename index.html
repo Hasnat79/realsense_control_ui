@@ -1,809 +1,987 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
+<meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>RealSense Capture Studio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;600&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;600&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --bg: #0a0a0f;
-    --surface: #111118;
-    --surface2: #1a1a24;
-    --border: #2a2a3a;
-    --accent: #00e5ff;
-    --accent2: #ff3d71;
-    --rec: #ff1744;
-    --warm: #ff9800;
-    --done: #00e676;
-    --text: #e8e8f0;
-    --muted: #6b6b85;
-    --font-head: 'Syne', sans-serif;
-    --font-mono: 'IBM Plex Mono', monospace;
-  }
+:root {
+  --bg:       #07070d;
+  --s1:       #0f0f18;
+  --s2:       #171724;
+  --border:   #252535;
+  --border2:  #333348;
+  --accent:   #5b8fff;
+  --accent2:  #ff5b8f;
+  --rec:      #ff3355;
+  --warm:     #ffaa33;
+  --done:     #33ffaa;
+  --text:     #e2e2f0;
+  --muted:    #5a5a78;
+  --dim:      #3a3a55;
+  --fhead:    'Space Grotesk', sans-serif;
+  --fmono:    'JetBrains Mono', monospace;
+}
 
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--font-mono);
-    min-height: 100vh;
-    overflow-x: hidden;
-  }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--fmono);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
 
-  body::before {
-    content: '';
-    position: fixed; inset: 0;
-    background-image:
-      repeating-linear-gradient(0deg, transparent, transparent 39px, rgba(0,229,255,0.03) 39px, rgba(0,229,255,0.03) 40px),
-      repeating-linear-gradient(90deg, transparent, transparent 39px, rgba(0,229,255,0.03) 39px, rgba(0,229,255,0.03) 40px);
-    pointer-events: none; z-index: 0;
-  }
+/* Subtle scanline texture */
+body::after {
+  content: '';
+  position: fixed; inset: 0; pointer-events: none; z-index: 999;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.07) 2px,
+    rgba(0,0,0,0.07) 4px
+  );
+}
 
-  .container {
-    position: relative; z-index: 1;
-    max-width: 1280px;
-    margin: 0 auto;
-    padding: 24px 32px;
-  }
+/* ── Layout ── */
+.shell {
+  display: grid;
+  grid-template-rows: 56px 1fr;
+  min-height: 100vh;
+}
 
-  /* ── Header ── */
-  header {
-    display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 40px;
-    padding-bottom: 20px;
-    border-bottom: 1px solid var(--border);
-  }
-  .logo {
-    font-family: var(--font-head);
-    font-weight: 800;
-    font-size: 22px;
-    letter-spacing: -0.5px;
-    color: var(--text);
-  }
-  .logo span { color: var(--accent); }
+/* ── Topbar ── */
+.topbar {
+  display: flex; align-items: center; gap: 24px;
+  padding: 0 28px;
+  background: var(--s1);
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 100;
+}
 
-  .status-badge {
-    display: flex; align-items: center; gap: 8px;
-    font-size: 11px; font-weight: 600; letter-spacing: 2px;
-    text-transform: uppercase;
-    padding: 6px 14px;
-    border-radius: 2px;
-    border: 1px solid var(--border);
-    transition: all 0.3s;
-  }
-  .status-badge .dot {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: var(--muted);
-    transition: background 0.3s;
-  }
-  .status-badge.warming { border-color: var(--warm); color: var(--warm); }
-  .status-badge.warming .dot { background: var(--warm); animation: blink 0.5s infinite; }
-  .status-badge.recording { border-color: var(--rec); color: var(--rec); }
-  .status-badge.recording .dot { background: var(--rec); animation: blink 0.8s infinite; }
-  .status-badge.saving { border-color: var(--accent); color: var(--accent); }
-  .status-badge.saving .dot { background: var(--accent); animation: spin-dot 1s linear infinite; }
-  .status-badge.done { border-color: var(--done); color: var(--done); }
-  .status-badge.done .dot { background: var(--done); }
+.logo {
+  font-family: var(--fhead);
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.5px;
+  color: var(--text);
+  white-space: nowrap;
+}
+.logo em { color: var(--accent); font-style: normal; }
 
-  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
-  @keyframes spin-dot { to { transform: rotate(360deg); } }
+.topbar-sep { flex: 1; }
 
-  /* ── Section Labels ── */
-  .section-label {
-    font-size: 10px; font-weight: 600; letter-spacing: 3px;
-    text-transform: uppercase; color: var(--muted);
-    margin-bottom: 14px;
-    display: flex; align-items: center; gap: 12px;
-  }
-  .section-label::after {
-    content: ''; flex: 1; height: 1px; background: var(--border);
-  }
+/* SSE connection dot */
+.conn-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--dim);
+  transition: background 0.4s;
+}
+.conn-dot.live { background: var(--done); box-shadow: 0 0 6px var(--done); }
+.conn-dot.err  { background: var(--rec); }
 
-  /* ── Camera Cards ── */
-  .cameras-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
-    gap: 20px;
-    margin-bottom: 32px;
-  }
+/* Global status pill */
+.status-pill {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 10px; font-weight: 600; letter-spacing: 2px;
+  text-transform: uppercase;
+  padding: 5px 12px;
+  border-radius: 2px;
+  border: 1px solid var(--border2);
+  color: var(--muted);
+  transition: all 0.25s;
+  white-space: nowrap;
+}
+.status-pill .pip {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--dim);
+  flex-shrink: 0;
+  transition: background 0.25s;
+}
+.status-pill.warming  { border-color: var(--warm);   color: var(--warm); }
+.status-pill.warming  .pip { background: var(--warm); animation: blink .5s infinite; }
+.status-pill.recording{ border-color: var(--rec);    color: var(--rec); }
+.status-pill.recording .pip{ background: var(--rec); animation: blink .8s infinite; }
+.status-pill.saving   { border-color: var(--accent); color: var(--accent); }
+.status-pill.saving   .pip{ background: var(--accent); animation: spin .9s linear infinite; }
+.status-pill.done     { border-color: var(--done);   color: var(--done); }
+.status-pill.done     .pip{ background: var(--done); }
 
-  .camera-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    overflow: hidden;
-    transition: border-color 0.3s;
-    position: relative;
-  }
-  .camera-card.active { border-color: var(--accent); }
-  .camera-card.recording-active { border-color: var(--rec); }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.15} }
+@keyframes spin  { to{ transform: rotate(360deg); } }
 
-  .camera-card::before {
-    content: '';
-    position: absolute; top: 0; left: 0; right: 0; height: 2px;
-    background: linear-gradient(90deg, var(--accent), #a259ff);
-    opacity: 0; transition: opacity 0.3s;
-  }
-  .camera-card.active::before { opacity: 1; }
-  .camera-card.recording-active::before { background: linear-gradient(90deg, var(--rec), var(--warm)); opacity: 1; }
+/* ── Main content ── */
+.content {
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
 
-  /* Preview area */
-  .preview-area {
-    position: relative;
-    width: 100%; aspect-ratio: 4/3;
-    background: #050508;
-    overflow: hidden;
-  }
-  .preview-img {
-    width: 100%; height: 100%; object-fit: cover;
-    display: block; background: #050508;
-  }
-  .preview-placeholder {
-    position: absolute; inset: 0;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 10px; color: var(--muted);
-    font-size: 12px;
-  }
-  .preview-placeholder svg { opacity: 0.3; }
-  .preview-overlay {
-    position: absolute; inset: 0;
-    display: none;
-    align-items: flex-start; justify-content: flex-end;
-    padding: 12px;
-  }
-  .preview-overlay.visible { display: flex; }
-  .rec-indicator {
-    display: flex; align-items: center; gap: 6px;
-    background: rgba(0,0,0,0.7);
-    border: 1px solid var(--rec);
-    padding: 4px 10px; border-radius: 2px;
-    font-size: 10px; font-weight: 600; letter-spacing: 2px;
-    color: var(--rec);
-  }
-  .rec-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--rec); animation: blink 0.8s infinite; }
+/* ── Section header ── */
+.sec {
+  font-size: 9px; font-weight: 600; letter-spacing: 3px;
+  text-transform: uppercase; color: var(--dim);
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 12px;
+}
+.sec::after { content:''; flex:1; height:1px; background: var(--border); }
 
-  /* Timer overlay */
-  .timer-overlay {
-    position: absolute; bottom: 12px; left: 12px;
-    background: rgba(0,0,0,0.7);
-    padding: 4px 10px; border-radius: 2px;
-    font-size: 13px; font-weight: 600;
-    color: var(--text); display: none;
-  }
-  .timer-overlay.visible { display: block; }
+/* ── Detect bar ── */
+.detect-bar {
+  background: var(--s1);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 16px 20px;
+  display: flex; align-items: center; gap: 16px;
+  flex-wrap: wrap;
+}
+.detect-bar p { flex:1; font-size: 11px; color: var(--muted); line-height: 1.7; min-width: 200px; }
+.detect-bar strong { color: var(--text); }
+.detect-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 
-  /* Warmup countdown */
-  .warmup-overlay {
-    position: absolute; inset: 0;
-    background: rgba(5,5,8,0.85);
-    display: none; flex-direction: column;
-    align-items: center; justify-content: center;
-    gap: 8px;
-  }
-  .warmup-overlay.visible { display: flex; }
-  .warmup-count {
-    font-family: var(--font-head); font-size: 80px; font-weight: 800;
-    color: var(--warm); line-height: 1;
-    animation: pulse-count 1s ease-in-out infinite;
-  }
-  @keyframes pulse-count { 0%,100%{transform:scale(1)} 50%{transform:scale(1.08)} }
-  .warmup-label { font-size: 11px; letter-spacing: 3px; color: var(--warm); text-transform: uppercase; }
+/* Output directory field */
+.output-field {
+  display: flex; align-items: center; gap: 8px;
+  flex-shrink: 0;
+}
+.output-lbl {
+  font-size: 9px; letter-spacing: 2px; text-transform: uppercase;
+  color: var(--dim); white-space: nowrap;
+}
+.output-input {
+  background: var(--s2); border: 1px solid var(--border);
+  border-radius: 2px; color: var(--text);
+  font-family: var(--fmono); font-size: 11px;
+  padding: 7px 10px; outline: none;
+  width: 260px;
+  transition: border-color .15s;
+}
+.output-input:focus { border-color: var(--accent); }
+.output-input:disabled { opacity: .35; cursor: not-allowed; }
 
-  /* Card body */
-  .card-body { padding: 16px 20px; }
+/* ── Camera grid ── */
+.cam-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
+  gap: 18px;
+}
 
-  .cam-meta {
-    display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 14px;
-  }
-  .cam-serial { font-size: 10px; color: var(--muted); letter-spacing: 1px; }
-  .cam-index {
-    font-size: 10px; color: var(--muted);
-    background: var(--surface2); padding: 2px 8px; border-radius: 2px;
-  }
+/* ── Camera card ── */
+.cam-card {
+  background: var(--s1);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+  transition: border-color .25s;
+}
+.cam-card::before {
+  content:'';
+  position:absolute; top:0; left:0; right:0; height:2px;
+  background: linear-gradient(90deg, var(--accent), #a05bff);
+  opacity:0; transition: opacity .25s;
+}
+.cam-card.active    { border-color: var(--accent); }
+.cam-card.active::before { opacity:1; }
+.cam-card.recording { border-color: var(--rec); }
+.cam-card.recording::before {
+  background: linear-gradient(90deg, var(--rec), var(--warm));
+  opacity:1;
+}
+.cam-card.frozen    { border-color: var(--warm) !important; }
+.cam-card.frozen::before {
+  background: linear-gradient(90deg, var(--warm), #ff7033) !important;
+  opacity:1 !important;
+}
 
-  .name-field { display: flex; align-items: center; gap: 10px; }
-  .name-field label {
-    font-size: 10px; letter-spacing: 2px; color: var(--muted);
-    text-transform: uppercase; white-space: nowrap; flex-shrink: 0;
-  }
-  .name-input {
-    flex: 1;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 2px;
-    color: var(--text);
-    font-family: var(--font-mono);
-    font-size: 13px;
-    padding: 8px 12px;
-    outline: none;
-    transition: border-color 0.2s;
-  }
-  .name-input:focus { border-color: var(--accent); }
-  .name-input:disabled { opacity: 0.4; cursor: not-allowed; }
+/* ── Preview area ── */
+.preview-wrap {
+  position: relative;
+  width:100%; aspect-ratio: 16/9;
+  background: #04040a;
+  overflow: hidden;
+}
 
-  /* ── Detect Section ── */
-  .detect-panel {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 20px 24px;
-    margin-bottom: 32px;
-    display: flex; align-items: center; gap: 20px;
-    flex-wrap: wrap;
-  }
-  .detect-info { flex: 1; font-size: 12px; color: var(--muted); line-height: 1.6; }
-  .detect-info strong { color: var(--text); display: block; margin-bottom: 2px; font-size: 13px; }
+/* The MJPEG img — always present, src never changes once set */
+.preview-img {
+  width:100%; height:100%;
+  object-fit: cover;
+  display: block;
+  background: #04040a;
+}
 
-  /* ── Buttons ── */
-  .btn {
-    font-family: var(--font-mono); font-size: 12px; font-weight: 600;
-    letter-spacing: 2px; text-transform: uppercase;
-    border: 1px solid; border-radius: 2px; cursor: pointer;
-    padding: 11px 24px;
-    transition: all 0.2s;
-    white-space: nowrap;
-    display: inline-flex; align-items: center; gap: 8px;
-  }
-  .btn:disabled { opacity: 0.3; cursor: not-allowed; }
+/* Loading state shown until first frame arrives */
+.preview-loading {
+  position:absolute; inset:0;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:10px; color: var(--muted); font-size:11px;
+  background: #04040a;
+  transition: opacity .4s;
+}
+.preview-loading.hidden { opacity:0; pointer-events:none; }
+.preview-loading svg { opacity:.25; }
 
-  .btn-ghost {
-    background: transparent; border-color: var(--border); color: var(--muted);
-  }
-  .btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+/* Overlays — driven purely by CSS classes, no show/hide logic */
+.ov-rec {
+  position:absolute; top:10px; right:10px;
+  display:flex; align-items:center; gap:5px;
+  background: rgba(0,0,0,.75);
+  border:1px solid var(--rec);
+  padding:3px 9px; border-radius:2px;
+  font-size:9px; font-weight:600; letter-spacing:2px; color: var(--rec);
+  opacity:0; transition: opacity .2s;
+  pointer-events:none;
+}
+.cam-card.recording .ov-rec { opacity:1; }
+.rec-pip { width:5px;height:5px;border-radius:50%;background:var(--rec);animation:blink .8s infinite; }
 
-  .btn-detect {
-    background: transparent; border-color: var(--accent); color: var(--accent);
-  }
-  .btn-detect:hover:not(:disabled) { background: rgba(0,229,255,0.08); }
+.ov-frozen {
+  position:absolute; top:10px; left:10px;
+  display:flex; align-items:center; gap:5px;
+  background: rgba(0,0,0,.75);
+  border:1px solid var(--warm);
+  padding:3px 9px; border-radius:2px;
+  font-size:9px; font-weight:600; letter-spacing:2px; color:var(--warm);
+  opacity:0; pointer-events:none; transition: opacity .2s;
+}
+.cam-card.frozen .ov-frozen { opacity:1; }
 
-  .btn-record {
-    background: var(--rec); border-color: var(--rec); color: #fff;
-    font-size: 13px; padding: 14px 36px;
-    box-shadow: 0 0 30px rgba(255,23,68,0.3);
-  }
-  .btn-record:hover:not(:disabled) { box-shadow: 0 0 45px rgba(255,23,68,0.5); transform: translateY(-1px); }
-  .btn-record:active:not(:disabled) { transform: translateY(0); }
+.ov-timer {
+  position:absolute; bottom:10px; left:10px;
+  background: rgba(0,0,0,.75);
+  padding:3px 9px; border-radius:2px;
+  font-size:12px; font-weight:600; color:var(--text);
+  opacity:0; pointer-events:none; transition: opacity .2s;
+}
+.cam-card.recording .ov-timer { opacity:1; }
 
-  .btn-stop {
-    background: transparent; border-color: var(--rec); color: var(--rec);
-    font-size: 13px; padding: 14px 36px;
-    animation: pulse-border 2s ease-in-out infinite;
-  }
-  @keyframes pulse-border {
-    0%,100%{ box-shadow: 0 0 0 0 rgba(255,23,68,0); }
-    50%{ box-shadow: 0 0 0 6px rgba(255,23,68,0.1); }
-  }
-  .btn-stop:hover:not(:disabled) { background: rgba(255,23,68,0.08); }
+/* Drop counter badge */
+.ov-drops {
+  position:absolute; bottom:10px; right:10px;
+  background: rgba(0,0,0,.75);
+  border:1px solid var(--dim);
+  padding:3px 9px; border-radius:2px;
+  font-size:9px; color: var(--muted); letter-spacing:1px;
+  opacity:0; pointer-events:none; transition: opacity .2s, border-color .2s, color .2s;
+}
+.cam-card.recording .ov-drops { opacity:1; }
+.ov-drops.warn { border-color: var(--warm); color: var(--warm); }
 
-  /* ── Controls Bar ── */
-  .controls-bar {
-    display: flex; align-items: center; justify-content: center;
-    gap: 16px;
-    padding: 24px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    margin-bottom: 32px;
-  }
+/* ── Card body ── */
+.card-body {
+  padding: 14px 18px;
+  display: flex; align-items: center; gap: 12px;
+}
+.cam-badge {
+  font-size: 9px; color: var(--muted);
+  background: var(--s2); padding: 2px 7px; border-radius:2px;
+  white-space:nowrap; flex-shrink:0;
+}
+.cam-serial { font-size: 9px; color: var(--dim); letter-spacing:.5px; flex-shrink:0; }
+.name-wrap { flex:1; display:flex; align-items:center; gap:8px; }
+.name-lbl { font-size:9px; letter-spacing:2px; color:var(--dim); text-transform:uppercase; flex-shrink:0; }
+.name-input {
+  flex:1; background: var(--s2); border:1px solid var(--border);
+  border-radius:2px; color:var(--text); font-family:var(--fmono);
+  font-size:12px; padding:6px 10px; outline:none;
+  transition: border-color .15s;
+}
+.name-input:focus { border-color: var(--accent); }
+.name-input:disabled { opacity:.35; cursor:not-allowed; }
 
-  /* ── Saved Files Panel ── */
-  .saved-panel {
-    background: var(--surface);
-    border: 1px solid var(--done);
-    border-radius: 4px;
-    overflow: hidden;
-    animation: slide-in 0.4s ease;
-  }
-  @keyframes slide-in { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+/* ── Backend process log ── */
+.process-panel {
+  background: var(--s1);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.process-header {
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  display:flex; align-items:center; gap:10px;
+  font-size: 9px; font-weight:600; letter-spacing:3px; text-transform:uppercase; color:var(--muted);
+}
+.process-header .live-tag {
+  margin-left:auto;
+  font-size:8px; letter-spacing:2px; color:var(--done);
+  display:flex; align-items:center; gap:5px;
+}
+.live-tag::before {
+  content:''; width:5px;height:5px;border-radius:50%;
+  background:var(--done); animation:blink .8s infinite;
+}
+.process-log {
+  height: 140px;
+  overflow-y: auto;
+  padding: 10px 18px;
+  display:flex; flex-direction:column; gap:4px;
+  scroll-behavior: smooth;
+}
+.process-log::-webkit-scrollbar { width:4px; }
+.process-log::-webkit-scrollbar-track { background: transparent; }
+.process-log::-webkit-scrollbar-thumb { background: var(--border2); border-radius:2px; }
 
-  .saved-header {
-    padding: 14px 20px;
-    background: rgba(0, 230, 118, 0.08);
-    border-bottom: 1px solid rgba(0, 230, 118, 0.2);
-    display: flex; align-items: center; gap: 10px;
-    font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
-    color: var(--done);
-  }
-  .saved-check { font-size: 16px; }
-  .saved-list { padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }
-  .saved-item {
-    display: flex; align-items: center; gap: 14px;
-    padding: 10px 14px;
-    background: var(--surface2); border-radius: 2px;
-    border-left: 2px solid var(--done);
-  }
-  .saved-cam-name { font-weight: 600; font-size: 13px; color: var(--done); min-width: 140px; }
-  .saved-path { font-size: 11px; color: var(--muted); flex: 1; word-break: break-all; }
+.log-entry {
+  display:flex; gap:10px; align-items:baseline;
+  font-size:10px; line-height:1.5;
+  opacity:0; animation: fadein .2s forwards;
+}
+@keyframes fadein { to{ opacity:1; } }
+.log-ts { color:var(--dim); flex-shrink:0; font-size:9px; }
+.log-msg { color:var(--muted); }
+.log-msg.info  { color:var(--text); }
+.log-msg.good  { color:var(--done); }
+.log-msg.warn  { color:var(--warm); }
+.log-msg.rec   { color:var(--rec); }
+.log-msg.save  { color:var(--accent); }
 
-  /* ── Error Toast ── */
-  .toast {
-    position: fixed; bottom: 24px; right: 24px;
-    background: var(--surface2); border: 1px solid var(--accent2);
-    color: var(--accent2); padding: 12px 18px;
-    border-radius: 2px; font-size: 12px;
-    display: none; z-index: 100;
-    animation: slide-in 0.3s ease;
-  }
-  .toast.visible { display: block; }
+/* ── Buttons ── */
+.btn {
+  font-family: var(--fmono); font-size:11px; font-weight:600;
+  letter-spacing:1.5px; text-transform:uppercase;
+  border:1px solid; border-radius:2px; cursor:pointer;
+  padding:10px 22px;
+  transition: all .15s;
+  display:inline-flex; align-items:center; gap:7px;
+  white-space:nowrap;
+}
+.btn:disabled { opacity:.3; cursor:not-allowed; }
 
-  /* ── Scan animation on detect ── */
-  .scan-line {
-    position: absolute; top: 0; left: 0; right: 0; height: 2px;
-    background: linear-gradient(90deg, transparent, var(--accent), transparent);
-    animation: scan 1.5s linear;
-    pointer-events: none;
-  }
-  @keyframes scan { from { top: 0%; } to { top: 100%; } }
+.btn-ghost { background:transparent; border-color:var(--border2); color:var(--muted); }
+.btn-ghost:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
 
-  /* ── No cameras placeholder ── */
-  .no-cameras {
-    text-align: center; padding: 48px;
-    color: var(--muted); font-size: 13px; line-height: 2;
-  }
-  .no-cameras .big { font-size: 40px; display: block; margin-bottom: 8px; opacity: 0.3; }
+.btn-detect { background:transparent; border-color:var(--accent); color:var(--accent); }
+.btn-detect:hover:not(:disabled) { background:rgba(91,143,255,.08); }
 
-  /* scrollbar */
-  ::-webkit-scrollbar { width: 6px; }
-  ::-webkit-scrollbar-track { background: var(--bg); }
-  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.btn-record {
+  background:var(--rec); border-color:var(--rec); color:#fff;
+  font-size:12px; padding:12px 32px;
+  box-shadow: 0 0 28px rgba(255,51,85,.25);
+}
+.btn-record:hover:not(:disabled) { box-shadow:0 0 40px rgba(255,51,85,.4); transform:translateY(-1px); }
+.btn-record:active:not(:disabled) { transform:translateY(0); }
 
-  .hidden { display: none !important; }
+.btn-stop {
+  background:transparent; border-color:var(--rec); color:var(--rec);
+  font-size:12px; padding:12px 32px;
+  animation: pulse-border 2s ease-in-out infinite;
+}
+@keyframes pulse-border {
+  0%,100%{ box-shadow:0 0 0 0 rgba(255,51,85,0); }
+  50%{ box-shadow:0 0 0 5px rgba(255,51,85,.08); }
+}
+.btn-stop:hover:not(:disabled) { background:rgba(255,51,85,.07); }
 
-  /* ── Frozen feed indicator ── */
-  .frozen-badge {
-    position: absolute; top: 12px; left: 12px;
-    display: none;
-    align-items: center; gap: 6px;
-    background: rgba(0,0,0,0.75);
-    border: 1px solid var(--warm);
-    padding: 4px 10px; border-radius: 2px;
-    font-size: 10px; font-weight: 600; letter-spacing: 2px;
-    color: var(--warm);
-    z-index: 10;
-  }
-  .frozen-badge.visible { display: flex; }
-  .frozen-icon { font-size: 12px; }
+/* ── RAM gauge ── */
+.ram-gauge {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 10px; color: var(--muted);
+  white-space: nowrap;
+}
+.ram-label { letter-spacing: 1px; text-transform: uppercase; font-size: 9px; }
+.ram-bar-wrap {
+  width: 72px; height: 6px;
+  background: var(--s2);
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.ram-bar {
+  height: 100%; width: 0%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width .6s ease, background .4s;
+}
+.ram-bar.med  { background: var(--warm); }
+.ram-bar.high { background: var(--rec); }
+.ram-val {
+  font-size: 10px; color: var(--text);
+  min-width: 44px; text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+  position:fixed; bottom:22px; right:22px;
+  background:var(--s2); border:1px solid var(--accent2);
+  color:var(--accent2); padding:10px 16px;
+  border-radius:2px; font-size:11px;
+  opacity:0; pointer-events:none;
+  transition: opacity .2s;
+  z-index:200;
+}
+.toast.show { opacity:1; pointer-events:auto; }
 
-  .camera-card.frozen { border-color: var(--warm) !important; }
-  .camera-card.frozen::before {
-    background: linear-gradient(90deg, var(--warm), #ff5722) !important;
-    opacity: 1 !important;
-  }
+.hidden { display:none !important; }
 </style>
 </head>
 <body>
+<div class="shell">
 
-<div class="container">
-
-  <!-- Header -->
-  <header>
-    <div class="logo">REALSENSE <span>CAPTURE</span> STUDIO</div>
-    <div class="status-badge" id="statusBadge">
-      <div class="dot"></div>
-      <span id="statusText">IDLE</span>
+  <!-- Topbar -->
+  <header class="topbar">
+    <div class="logo">REAL<em>SENSE</em> CAPTURE</div>
+    <div class="topbar-sep"></div>
+    <div class="ram-gauge" id="ramGauge" title="Process RSS memory">
+      <span class="ram-label">RAM</span>
+      <div class="ram-bar-wrap"><div class="ram-bar" id="ramBar"></div></div>
+      <span class="ram-val" id="ramVal">—</span>
+    </div>
+    <div class="conn-dot" id="connDot" title="SSE connection"></div>
+    <div class="status-pill" id="statusPill">
+      <div class="pip"></div>
+      <span id="statusTxt">IDLE</span>
     </div>
   </header>
 
-  <!-- Detect Panel -->
-  <div class="section-label">01 — Device Detection</div>
-  <div class="detect-panel" id="detectPanel">
-    <div class="detect-info">
-      <strong>Connected Cameras</strong>
-      Click detect to scan for RealSense devices and configure camera names before recording.
+  <main class="content">
+
+    <!-- 01 Detect + Record -->
+    <div>
+      <div class="sec">01 — Devices &amp; Recording</div>
+      <div class="detect-bar">
+        <p><strong>Connected Cameras</strong><br>
+        Detect devices to start preview feeds. Preview runs continuously — recording starts and stops independently.</p>
+        <div class="output-field">
+          <label class="output-lbl">Output</label>
+          <input class="output-input" type="text" id="outputDir"
+                 placeholder="Loading…"
+                 autocomplete="off" spellcheck="false"
+                 title="Directory where .bag files will be saved"/>
+        </div>
+        <div class="detect-actions">
+          <button class="btn btn-detect" id="detectBtn" onclick="detectCameras()">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            Detect
+          </button>
+          <button class="btn btn-record" id="recordBtn" onclick="startRecording()" disabled>⬤ Start Recording</button>
+          <button class="btn btn-stop hidden" id="stopBtn" onclick="stopRecording()">■ Stop</button>
+        </div>
+      </div>
     </div>
-    <button class="btn btn-detect" id="detectBtn" onclick="detectCameras()">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-      Detect Cameras
-    </button>
-  </div>
 
-  <!-- Camera Cards -->
-  <div class="section-label">02 — Camera Configuration &amp; Preview</div>
-  <div id="camerasContainer">
-    <div class="no-cameras">
-      <span class="big">⬡</span>
-      No cameras detected yet.<br>
-      Click <strong>Detect Cameras</strong> to scan for connected RealSense devices.
+    <!-- 02 Cameras -->
+    <div>
+      <div class="sec">02 — Live Preview &amp; Configuration</div>
+      <div class="cam-grid" id="camGrid">
+        <div style="text-align:center;padding:48px;color:var(--muted);font-size:12px;grid-column:1/-1">
+          <div style="font-size:32px;opacity:.2;margin-bottom:8px">⬡</div>
+          No cameras detected — click Detect above.
+        </div>
+      </div>
     </div>
-  </div>
 
-  <!-- Controls Bar -->
-  <div class="controls-bar" id="controlsBar">
-    <button class="btn btn-ghost" id="detectBtn2" onclick="detectCameras()">
-      ↺ Re-scan
-    </button>
-    <button class="btn btn-record" id="recordBtn" onclick="startRecording()" disabled>
-      ⬤ Start Recording
-    </button>
-    <button class="btn btn-stop hidden" id="stopBtn" onclick="stopRecording()">
-      ■ Stop Recording
-    </button>
-  </div>
+    <!-- 03 Backend process log -->
+    <div>
+      <div class="sec">03 — Backend Process</div>
+      <div class="process-panel">
+        <div class="process-header">
+          Live Updates
+          <span class="live-tag" id="liveTag">SSE</span>
+        </div>
+        <div class="process-log" id="processLog">
+          <div class="log-entry">
+            <span class="log-ts">--:--:--</span>
+            <span class="log-msg">Waiting for server connection…</span>
+          </div>
+        </div>
+      </div>
+    </div>
 
-  <!-- Saved Files -->
-  <div id="savedPanel" class="hidden"></div>
 
+  </main>
 </div>
 
-<!-- Toast -->
 <div class="toast" id="toast"></div>
 
 <script>
-const API = `${window.location.protocol}//${window.location.hostname}:5050/api`;
+// ── Config ────────────────────────────────────────────────────────────────────
+const API  = `${location.protocol}//${location.hostname}:5050/api`;
+const BASE = `${location.protocol}//${location.hostname}:5050`;
 
-let cameras = [];
-let appStatus = 'idle';
-let recordingStart = null;
-let timerInterval = null;
-let warmupInterval = null;
-let statusPollInterval = null;
+// ── State ─────────────────────────────────────────────────────────────────────
+let cameras        = [];          // [{serial, name, user_name}]
+let appStatus      = 'idle';
+let recordingStart = null;        // Date.now() when recording began
+let timerRaf       = null;        // requestAnimationFrame handle for timer
+let sseSource      = null;        // EventSource
 
-// ── Freeze watchdog ────────────────────────────────────────────────────────────
-// Tracks the last time each camera's <img> fired a load event (i.e. got a frame)
-const lastFrameTime = {};      // serial -> timestamp ms
-const FREEZE_THRESHOLD = 3500; // ms without a new frame = frozen
-const FREEZE_CHECK_MS  = 1500; // how often we check
-let freezeWatchdogInterval = null;
+// Per-camera: last frame timestamp for freeze detection
+const lastFrame    = {};          // serial -> ms
+const FREEZE_MS    = 4000;
+
+// ── SSE ───────────────────────────────────────────────────────────────────────
+// Replace 500ms polling entirely. The server pushes state on every transition.
+
+function connectSSE() {
+  if (sseSource) sseSource.close();
+  sseSource = new EventSource(`${API}/events`);
+
+  sseSource.onopen = () => {
+    document.getElementById('connDot').className = 'conn-dot live';
+    log('SSE connected', 'good');
+  };
+
+  sseSource.onerror = () => {
+    document.getElementById('connDot').className = 'conn-dot err';
+    // Browser auto-reconnects EventSource — we just log the gap
+    log('SSE reconnecting…', 'warn');
+  };
+
+  sseSource.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      applyServerState(data);
+    } catch {}
+  };
+}
+
+// ── RAM gauge ─────────────────────────────────────────────────────────────────
+// Max shown on bar = 1.5 GB (matches server's hard RSS cap).
+const RAM_CAP = 400 * 1024 * 1024;
+
+function updateRAM(bytes) {
+  if (!bytes) return;
+  const bar = document.getElementById('ramBar');
+  const val = document.getElementById('ramVal');
+  if (!bar || !val) return;
+
+  const pct = Math.min(100, (bytes / RAM_CAP) * 100);
+  bar.style.width = pct + '%';
+  bar.className = 'ram-bar' + (pct > 75 ? ' high' : pct > 45 ? ' med' : '');
+
+  // Human-readable: show MB with one decimal
+  const mb = bytes / (1024 * 1024);
+  val.textContent = mb >= 1000
+    ? (mb / 1024).toFixed(2) + ' GB'
+    : mb.toFixed(0) + ' MB';
+}
+
+// ── Apply server state ────────────────────────────────────────────────────────
+// Single function that reconciles ALL UI to whatever the server says.
+// Called on every SSE event — no other code touches recording state.
+
+let _prevStatus = '';
+let _prevDrops  = {};
+
+function applyServerState(data) {
+  const status = data.status || 'idle';
+
+  // ── Global status pill ──
+  setStatusPill(status);
+
+  // ── RAM gauge ──
+  if (data.rss_bytes) updateRAM(data.rss_bytes);
+
+  // ── Per-camera overlays (driven from server, not timers) ──
+  if (data.cameras) {
+    Object.entries(data.cameras).forEach(([camId, cs]) => {
+      const serial = cs.serial;
+      updateCamOverlays(serial, status, cs.drops);
+    });
+  }
+
+  // ── Transitions ──
+  const changed = status !== _prevStatus;
+
+  if (changed) {
+    switch (status) {
+      case 'warming':
+        onWarmingStart();
+        break;
+      case 'recording':
+        onRecordingStart();
+        break;
+      case 'saving':
+        onSavingStart();
+        break;
+      case 'done':
+        onDone(data.saved_files || []);
+        break;
+    }
+    _prevStatus = status;
+  }
+
+  // ── Drop counter updates (even without status change) ──
+  if (data.cameras) {
+    Object.values(data.cameras).forEach(cs => {
+      const prev = _prevDrops[cs.serial] || 0;
+      if (cs.drops > prev) {
+        log(`${cs.name || cs.serial}: ${cs.drops} dropped frames`, 'warn');
+        _prevDrops[cs.serial] = cs.drops;
+      }
+    });
+  }
+}
+
+function updateCamOverlays(serial, status, drops) {
+  const card = document.getElementById(`card-${serial}`);
+  if (!card) return;
+
+  // Card state classes — single source of truth
+  card.classList.toggle('active',    status === 'warming');
+  card.classList.toggle('recording', status === 'recording');
+  card.classList.remove('warming'); // warmup shown via .active
+  if (status === 'warming') card.classList.add('warming');
+
+  // Drop counter
+  const dEl = card.querySelector('.ov-drops');
+  if (dEl) {
+    dEl.textContent = drops > 0 ? `${drops} drops` : '';
+    dEl.classList.toggle('warn', drops > 20);
+  }
+}
+
+// ── Status transitions ────────────────────────────────────────────────────────
+
+function onWarmingStart() {
+  log('Opening pipelines…', 'info');
+  document.getElementById('recordBtn').classList.add('hidden');
+  document.getElementById('stopBtn').classList.remove('hidden');
+  document.getElementById('stopBtn').disabled = false;
+  setInputsDisabled(true);
+  startWarmupCountdown();
+  startFreezeWatchdog();
+}
+
+function onRecordingStart() {
+  log('Recording started ⬤', 'rec');
+  stopWarmupCountdown();
+  // Remove warmup overlay, show REC + timer on all cards
+  cameras.forEach(c => {
+    const card = document.getElementById(`card-${c.serial}`);
+    if (card) {
+      card.classList.remove('warming');
+      card.classList.add('recording');
+    }
+  });
+  recordingStart = Date.now();
+  startTimer();
+}
+
+function onSavingStart() {
+  log('Stop received — finalising bag files…', 'save');
+  stopTimer();
+  cameras.forEach(c => {
+    const card = document.getElementById(`card-${c.serial}`);
+    if (card) card.classList.remove('recording');
+    // Timer overlay stays until done
+  });
+  document.getElementById('stopBtn').disabled = true;
+}
+
+function onDone(files) {
+  log(`Saved ${files.length} bag file${files.length !== 1 ? 's' : ''} ✓`, 'good');
+  files.forEach(f => log(`  ${f.name} → ${f.bag_path}  (${f.drops} drops)`, f.drops > 0 ? 'warn' : 'good'));
+
+  stopTimer();
+  stopFreezeWatchdog();
+  recordingStart = null;
+
+  document.getElementById('stopBtn').classList.add('hidden');
+  document.getElementById('stopBtn').disabled = false;
+  document.getElementById('recordBtn').classList.remove('hidden');
+  setInputsDisabled(false);
+  _prevDrops = {};
+
+  // Clear per-camera state
+  cameras.forEach(c => {
+    const card = document.getElementById(`card-${c.serial}`);
+    if (card) {
+      card.className = card.className
+        .replace(/\b(active|recording|warming)\b/g, '').trim();
+    }
+    const tEl = document.querySelector(`#card-${c.serial} .ov-timer`);
+    if (tEl) tEl.textContent = '00:00';
+  });
+
+
+  // Keep preview stream running — img src never changes, stream continues
+}
+
+// ── Warmup countdown ──────────────────────────────────────────────────────────
+// Counts down 3..2..1 purely visually — actual GO signal comes from SSE.
+
+function startWarmupCountdown() {
+  // No countdown — pipelines are already live; 300ms hardware pause on server.
+  // Just mark cards as warming so the border colour shows activity.
+  cameras.forEach(c => {
+    const card = document.getElementById(`card-${c.serial}`);
+    if (card) card.classList.add('warming');
+  });
+}
+
+function stopWarmupCountdown() {
+  cameras.forEach(c => {
+    const card = document.getElementById(`card-${c.serial}`);
+    if (card) card.classList.remove('warming');
+  });
+}
+
+// ── Recording timer (RAF-based, smooth) ──────────────────────────────────────
+
+function startTimer() {
+  if (timerRaf) cancelAnimationFrame(timerRaf);
+  function tick() {
+    if (!recordingStart) return;
+    const s = Math.floor((Date.now() - recordingStart) / 1000);
+    const mm = String(Math.floor(s / 60)).padStart(2, '0');
+    const ss = String(s % 60).padStart(2, '0');
+    const txt = `${mm}:${ss}`;
+    cameras.forEach(c => {
+      const el = document.querySelector(`#card-${c.serial} .ov-timer`);
+      if (el) el.textContent = txt;
+    });
+    timerRaf = requestAnimationFrame(tick);
+  }
+  timerRaf = requestAnimationFrame(tick);
+}
+
+function stopTimer() {
+  if (timerRaf) { cancelAnimationFrame(timerRaf); timerRaf = null; }
+}
+
+// ── Freeze watchdog ───────────────────────────────────────────────────────────
+// Independently monitors the MJPEG stream health regardless of recording state.
+
+let freezeInterval = null;
 
 function startFreezeWatchdog() {
-  if (freezeWatchdogInterval) clearInterval(freezeWatchdogInterval);
-  freezeWatchdogInterval = setInterval(() => {
-    if (appStatus === 'idle' || appStatus === 'done') return; // only watch when live
+  if (freezeInterval) clearInterval(freezeInterval);
+  freezeInterval = setInterval(() => {
     const now = Date.now();
     cameras.forEach(c => {
-      const last = lastFrameTime[c.serial] || 0;
-      const stale = last > 0 && (now - last) > FREEZE_THRESHOLD;
-      markFrozen(c.serial, stale);
-      if (stale) kickStream(c.serial);
+      const last = lastFrame[c.serial] || 0;
+      const frozen = last > 0 && (now - last) > FREEZE_MS;
+      const card = document.getElementById(`card-${c.serial}`);
+      if (card) card.classList.toggle('frozen', frozen);
+      if (frozen) kickStream(c.serial);
     });
-  }, FREEZE_CHECK_MS);
+  }, 1500);
 }
 
 function stopFreezeWatchdog() {
-  clearInterval(freezeWatchdogInterval);
-  freezeWatchdogInterval = null;
-}
-
-function markFrozen(serial, frozen) {
-  const badge = document.getElementById(`frozen-${serial}`);
-  const card  = document.getElementById(`card-${serial}`);
-  if (frozen) {
-    badge?.classList.add('visible');
-    card?.classList.add('frozen');
-  } else {
-    badge?.classList.remove('visible');
-    card?.classList.remove('frozen');
-  }
+  if (freezeInterval) { clearInterval(freezeInterval); freezeInterval = null; }
+  cameras.forEach(c => {
+    const card = document.getElementById(`card-${c.serial}`);
+    if (card) card.classList.remove('frozen');
+  });
 }
 
 function kickStream(serial) {
-  // Bounce the <img> src to force the browser to re-open the MJPEG connection
-  const img = document.getElementById(`img-${serial}`);
-  if (!img) return;
-  img.src = streamUrl(serial) + '?kick=' + Date.now();
+  const img = document.getElementById(`stream-${serial}`);
+  if (img) img.src = streamUrl(serial) + '?k=' + Date.now();
 }
 
-// ── Utilities ──────────────────────────────────────────────────────────────────
-function showToast(msg, duration=3500) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('visible');
-  setTimeout(() => t.classList.remove('visible'), duration);
+// ── Stream events ─────────────────────────────────────────────────────────────
+
+function onStreamLoad(serial) {
+  lastFrame[serial] = Date.now();
+  const card = document.getElementById(`card-${serial}`);
+  if (card) card.classList.remove('frozen');
+  const ld = document.getElementById(`loading-${serial}`);
+  if (ld) ld.classList.add('hidden');
 }
 
-function setStatus(s) {
+function onStreamError(serial) {
+  setTimeout(() => kickStream(serial), 2000);
+}
+
+// ── Status pill ───────────────────────────────────────────────────────────────
+
+function setStatusPill(s) {
   appStatus = s;
-  const badge = document.getElementById('statusBadge');
-  const text  = document.getElementById('statusText');
-  badge.className = 'status-badge ' + s;
-  const labels = { idle:'IDLE', warming:'WARMING UP', recording:'REC', saving:'SAVING', done:'SAVED' };
-  text.textContent = labels[s] || s.toUpperCase();
+  const pill = document.getElementById('statusPill');
+  const txt  = document.getElementById('statusTxt');
+  pill.className = `status-pill ${s}`;
+  const labels = { idle:'IDLE', warming:'WARMING', recording:'REC ●', saving:'SAVING', done:'SAVED' };
+  txt.textContent = labels[s] || s.toUpperCase();
 }
 
-// ── Detect Cameras ─────────────────────────────────────────────────────────────
+// ── Process log ───────────────────────────────────────────────────────────────
+
+function log(msg, type = '') {
+  const el = document.getElementById('processLog');
+  if (!el) return;
+  const now = new Date();
+  const ts  = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+  const row = document.createElement('div');
+  row.className = 'log-entry';
+  row.innerHTML = `<span class="log-ts">${ts}</span><span class="log-msg ${type}">${msg}</span>`;
+  el.appendChild(row);
+  // Keep last 60 entries
+  while (el.children.length > 60) el.removeChild(el.firstChild);
+  el.scrollTop = el.scrollHeight;
+}
+
+// ── Detect cameras ────────────────────────────────────────────────────────────
+
 async function detectCameras() {
-  // Block re-scan while recording
-  if (appStatus === 'warming' || appStatus === 'recording' || appStatus === 'saving') {
+  if (['warming','recording','saving'].includes(appStatus)) {
     showToast('Cannot re-scan while recording');
     return;
   }
+  const b1 = document.getElementById('detectBtn');
+  b1.disabled = true;
+  b1.textContent = 'Scanning…';
+  log('Restarting preview pipelines…');
 
-  const btn  = document.getElementById('detectBtn');
-  const btn2 = document.getElementById('detectBtn2');
-  btn.disabled = true; btn2.disabled = true;
-  btn.textContent = 'Restarting…';
-
-  // Step 1: tear down and restart all preview pipelines on the server
   try {
-    await fetch(`${API}/restart_previews`, { method: 'POST' });
-  } catch(e) { /* server may not have any previews yet — that's fine */ }
+    await fetch(`${API}/restart_previews`, { method:'POST' });
+  } catch {}
 
-  btn.textContent = 'Scanning…';
-
-  // Step 2: detect devices (server starts fresh preview pipelines per serial)
   try {
     const res  = await fetch(`${API}/detect`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
 
-    // Preserve existing user-typed names across re-scans
-    const existingNames = {};
-    cameras.forEach(c => { existingNames[c.serial] = c.user_name; });
-
-    cameras = data.cameras.map(c => ({
-      ...c,
-      user_name: existingNames[c.serial] ?? '',
-    }));
-
-    // Reset freeze state for all cameras
-    cameras.forEach(c => {
-      lastFrameTime[c.serial] = 0;
-      markFrozen(c.serial, false);
-    });
+    const prev = {};
+    cameras.forEach(c => { prev[c.serial] = c.user_name; });
+    cameras = data.cameras.map(c => ({ ...c, user_name: prev[c.serial] ?? '' }));
 
     renderCameras();
     document.getElementById('recordBtn').disabled = cameras.length === 0;
-    setStatus('idle');
-
-    // Start watchdog now that we have cameras
-    if (cameras.length > 0) startFreezeWatchdog();
-
+    log(`Found ${cameras.length} camera${cameras.length !== 1 ? 's' : ''}`, cameras.length ? 'good' : 'warn');
+    startFreezeWatchdog();
   } catch(e) {
     showToast('Detection failed: ' + e.message);
+    log('Detection failed: ' + e.message, 'warn');
   } finally {
-    btn.disabled = false; btn2.disabled = false;
-    btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg> Detect Cameras`;
+    b1.disabled = false;
+    b1.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg> Detect`;
   }
 }
 
-// ── Render Camera Cards ────────────────────────────────────────────────────────
-function renderCameras() {
-  const container = document.getElementById('camerasContainer');
-  if (cameras.length === 0) {
-    container.innerHTML = `<div class="no-cameras"><span class="big">⬡</span>No RealSense devices found.<br>Check USB connection and try again.</div>`;
-    return;
-  }
-  container.innerHTML = `<div class="cameras-grid">${cameras.map((c,i) => cameraCardHTML(c,i)).join('')}</div>`;
-}
+// ── Render camera cards ───────────────────────────────────────────────────────
 
 function streamUrl(serial) {
-  return `${window.location.protocol}//${window.location.hostname}:5050/api/stream/${serial}`;
+  return `${BASE}/api/stream/${serial}`;
 }
 
-function cameraCardHTML(cam, idx) {
+function renderCameras() {
+  const grid = document.getElementById('camGrid');
+  if (!cameras.length) {
+    grid.innerHTML = `<div style="text-align:center;padding:48px;color:var(--muted);font-size:12px;grid-column:1/-1"><div style="font-size:32px;opacity:.2;margin-bottom:8px">⬡</div>No cameras found. Check USB connection.</div>`;
+    return;
+  }
+  grid.innerHTML = cameras.map((c, i) => camCardHTML(c, i)).join('');
+}
+
+function camCardHTML(cam, idx) {
+  // IMPORTANT: the stream img is set once and never cleared.
+  // It stays connected through recording start/stop — the server always
+  // has frames to send (from either the idle preview or recording pipeline).
   return `
-  <div class="camera-card" id="card-${cam.serial}">
-    <div class="preview-area" id="preview-area-${cam.serial}">
-      <div class="preview-placeholder" id="placeholder-${cam.serial}">
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+  <div class="cam-card" id="card-${cam.serial}">
+    <div class="preview-wrap">
+      <div class="preview-loading" id="loading-${cam.serial}">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="M23 7 16 12l7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
         </svg>
-        <span>Connecting to camera…</span>
+        <span>Connecting…</span>
       </div>
-      <img class="preview-img" id="img-${cam.serial}"
+      <img class="preview-img" id="stream-${cam.serial}"
            src="${streamUrl(cam.serial)}"
-           alt="live feed"
+           alt=""
            onload="onStreamLoad('${cam.serial}')"
            onerror="onStreamError('${cam.serial}')"/>
-      <div class="frozen-badge" id="frozen-${cam.serial}">
-        <span class="frozen-icon">⚠</span> FROZEN
-      </div>
-      <div class="preview-overlay" id="rec-overlay-${cam.serial}">
-        <div class="rec-indicator"><div class="rec-dot"></div> REC</div>
-      </div>
-      <div class="timer-overlay" id="timer-${cam.serial}">00:00</div>
-      <div class="warmup-overlay" id="warmup-${cam.serial}">
-        <div class="warmup-count" id="warmup-count-${cam.serial}">3</div>
-        <div class="warmup-label">Warming up</div>
-      </div>
+      <div class="ov-rec"><div class="rec-pip"></div> REC</div>
+      <div class="ov-frozen">⚠ FROZEN</div>
+      <div class="ov-timer">00:00</div>
+      <div class="ov-drops"></div>
     </div>
     <div class="card-body">
-      <div class="cam-meta">
-        <span class="cam-serial">SN: ${cam.serial}</span>
-        <span class="cam-index">CAM ${String(idx+1).padStart(2,'0')}</span>
-      </div>
-      <div class="name-field">
-        <label>Name</label>
-        <input class="name-input" type="text"
-          id="name-${cam.serial}"
-          placeholder="e.g. topview_cam"
-          value="${cam.user_name}"
-          oninput="updateCamName('${cam.serial}', this.value)"
-          autocomplete="off" spellcheck="false" />
+      <span class="cam-badge">CAM ${String(idx+1).padStart(2,'0')}</span>
+      <span class="cam-serial">SN:${cam.serial.slice(-8)}</span>
+      <div class="name-wrap">
+        <label class="name-lbl">Name</label>
+        <input class="name-input" type="text" id="name-${cam.serial}"
+               value="${cam.user_name}"
+               placeholder="e.g. top_view"
+               oninput="updateName('${cam.serial}', this.value)"
+               autocomplete="off" spellcheck="false"/>
       </div>
     </div>
   </div>`;
 }
 
-function onStreamLoad(serial) {
-  // Record that a frame arrived — used by the freeze watchdog
-  lastFrameTime[serial] = Date.now();
-  markFrozen(serial, false);
-
-  const ph = document.getElementById(`placeholder-${serial}`);
-  if (ph) ph.style.display = 'none';
+function updateName(serial, val) {
+  const c = cameras.find(c => c.serial === serial);
+  if (c) c.user_name = val;
 }
 
-function onStreamError(serial) {
-  // Don't update lastFrameTime — let the watchdog detect this as frozen
-  const img = document.getElementById(`img-${serial}`);
-  setTimeout(() => {
-    if (img) img.src = streamUrl(serial) + '?t=' + Date.now();
-  }, 1500);
+function setInputsDisabled(v) {
+  document.querySelectorAll('.name-input').forEach(el => el.disabled = v);
+  document.getElementById('detectBtn').disabled  = v;
+  const od = document.getElementById('outputDir');
+  if (od) od.disabled = v;
 }
 
-function updateCamName(serial, val) {
-  const cam = cameras.find(c => c.serial === serial);
-  if (cam) cam.user_name = val;
-}
+// ── Recording controls ────────────────────────────────────────────────────────
 
-// ── Recording ──────────────────────────────────────────────────────────────────
 async function startRecording() {
+  const outputDir = document.getElementById('outputDir')?.value.trim() || '';
   const payload = cameras.map(c => ({
-    serial: c.serial,
-    user_name: c.user_name.trim() || `cam_${c.serial.slice(-4)}`
+    serial:    c.serial,
+    user_name: (c.user_name || '').trim() || `cam_${c.serial.slice(-4)}`
   }));
-
   try {
     const res  = await fetch(`${API}/start_recording`, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ cameras: payload })
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ cameras: payload, output_dir: outputDir })
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
-
-    document.getElementById('recordBtn').classList.add('hidden');
-    document.getElementById('stopBtn').classList.remove('hidden');
-    document.getElementById('detectBtn').disabled = true;
-    document.getElementById('detectBtn2').disabled = true;
-    document.getElementById('savedPanel').classList.add('hidden');
-    document.querySelectorAll('.name-input').forEach(el => el.disabled = true);
-
-    setStatus('warming');
-    startWarmupCountdown();
-    startFreezeWatchdog();
-    pollStatus();
-
-    cameras.forEach(c => {
-      const card = document.getElementById(`card-${c.serial}`);
-      if (card) card.classList.add('active');
-    });
-
+    log(`Output: ${outputDir || '(default)'}`, 'info');
+    _prevDrops = {};
   } catch(e) {
     showToast('Failed to start: ' + e.message);
+    log('Failed to start: ' + e.message, 'warn');
   }
-}
-
-function startWarmupCountdown() {
-  let count = 3;
-  cameras.forEach(c => {
-    const overlay = document.getElementById(`warmup-${c.serial}`);
-    if (overlay) overlay.classList.add('visible');
-    const el = document.getElementById(`warmup-count-${c.serial}`);
-    if (el) el.textContent = count;
-  });
-
-  warmupInterval = setInterval(() => {
-    count--;
-    cameras.forEach(c => {
-      const el = document.getElementById(`warmup-count-${c.serial}`);
-      if (el) el.textContent = Math.max(count, 0);
-    });
-    if (count <= 0) {
-      clearInterval(warmupInterval);
-      cameras.forEach(c => {
-        const wo = document.getElementById(`warmup-${c.serial}`);
-        if (wo) wo.classList.remove('visible');
-        const ro = document.getElementById(`rec-overlay-${c.serial}`);
-        if (ro) ro.classList.add('visible');
-        const to = document.getElementById(`timer-${c.serial}`);
-        if (to) to.classList.add('visible');
-        const card = document.getElementById(`card-${c.serial}`);
-        if (card) { card.classList.remove('active'); card.classList.add('recording-active'); }
-      });
-      recordingStart = Date.now();
-      timerInterval = setInterval(updateTimers, 500);
-    }
-  }, 1000);
-}
-
-function updateTimers() {
-  if (!recordingStart) return;
-  const elapsed = Math.floor((Date.now() - recordingStart) / 1000);
-  const mm = String(Math.floor(elapsed/60)).padStart(2,'0');
-  const ss = String(elapsed % 60).padStart(2,'0');
-  cameras.forEach(c => {
-    const el = document.getElementById(`timer-${c.serial}`);
-    if (el) el.textContent = `${mm}:${ss}`;
-  });
 }
 
 async function stopRecording() {
   try {
-    const res  = await fetch(`${API}/stop_recording`, { method: 'POST' });
+    const res  = await fetch(`${API}/stop_recording`, { method:'POST' });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
-
-    setStatus('saving');
-    clearInterval(timerInterval);
-    clearInterval(warmupInterval);
-
-    cameras.forEach(c => {
-      const ro = document.getElementById(`rec-overlay-${c.serial}`);
-      if (ro) ro.classList.remove('visible');
-      const card = document.getElementById(`card-${c.serial}`);
-      if (card) card.classList.remove('recording-active');
-    });
-
-    document.getElementById('stopBtn').disabled = true;
-
+    // UI update comes via SSE
   } catch(e) {
     showToast('Failed to stop: ' + e.message);
   }
 }
 
-// ── Status Polling ─────────────────────────────────────────────────────────────
-function pollStatus() {
-  if (statusPollInterval) clearInterval(statusPollInterval);
-  statusPollInterval = setInterval(async () => {
-    try {
-      const res  = await fetch(`${API}/status`);
-      const data = await res.json();
-      setStatus(data.status);
 
-      if (data.status === 'done') {
-        clearInterval(statusPollInterval);
-        onRecordingDone(data.saved_files);
-      }
-    } catch(e) { /* ignore */ }
-  }, 500);
+// ── Toast ─────────────────────────────────────────────────────────────────────
+
+let toastTimer = null;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
 }
 
-function onRecordingDone(files) {
-  document.getElementById('stopBtn').classList.add('hidden');
-  document.getElementById('stopBtn').disabled = false;
-  document.getElementById('recordBtn').classList.remove('hidden');
-  document.getElementById('detectBtn').disabled = false;
-  document.getElementById('detectBtn2').disabled = false;
-  document.querySelectorAll('.name-input').forEach(el => el.disabled = false);
+// ── Boot ──────────────────────────────────────────────────────────────────────
 
-  stopFreezeWatchdog();
-  clearInterval(timerInterval);
-  cameras.forEach(c => {
-    markFrozen(c.serial, false);
-    const to = document.getElementById(`timer-${c.serial}`);
-    if (to) { to.classList.remove('visible'); to.textContent = '00:00'; }
+// Fetch server's default output directory (~/Documents) and prefill the input.
+fetch(`${API}/config`)
+  .then(r => r.json())
+  .then(d => {
+    const el = document.getElementById('outputDir');
+    if (el && d.default_output_dir) el.placeholder = el.value = d.default_output_dir;
+  })
+  .catch(() => {
+    const el = document.getElementById('outputDir');
+    if (el) el.placeholder = '~/Documents';
   });
-  recordingStart = null;
 
-  renderSavedPanel(files);
-}
-
-function renderSavedPanel(files) {
-  const panel = document.getElementById('savedPanel');
-  panel.className = 'saved-panel';
-  panel.innerHTML = `
-    <div class="saved-header">
-      <span class="saved-check">✓</span>
-      Recording Saved — ${files.length} bag file${files.length !== 1 ? 's' : ''}
-    </div>
-    <div class="saved-list">
-      ${files.map(f => `
-        <div class="saved-item">
-          <div class="saved-cam-name">${f.name}</div>
-          <div class="saved-path">${f.bag_path}</div>
-        </div>
-      `).join('')}
-    </div>
-  `;
-}
-
-// ── Init ──────────────────────────────────────────────────────────────────────
+connectSSE();
 detectCameras();
 </script>
 </body>
