@@ -145,6 +145,26 @@ body::after {
 .detect-bar strong { color: var(--text); }
 .detect-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 
+/* Output directory field */
+.output-field {
+  display: flex; align-items: center; gap: 8px;
+  flex-shrink: 0;
+}
+.output-lbl {
+  font-size: 9px; letter-spacing: 2px; text-transform: uppercase;
+  color: var(--dim); white-space: nowrap;
+}
+.output-input {
+  background: var(--s2); border: 1px solid var(--border);
+  border-radius: 2px; color: var(--text);
+  font-family: var(--fmono); font-size: 11px;
+  padding: 7px 10px; outline: none;
+  width: 260px;
+  transition: border-color .15s;
+}
+.output-input:focus { border-color: var(--accent); }
+.output-input:disabled { opacity: .35; cursor: not-allowed; }
+
 /* ── Camera grid ── */
 .cam-grid {
   display: grid;
@@ -426,6 +446,13 @@ body::after {
       <div class="detect-bar">
         <p><strong>Connected Cameras</strong><br>
         Detect devices to start preview feeds. Preview runs continuously — recording starts and stops independently.</p>
+        <div class="output-field">
+          <label class="output-lbl">Output</label>
+          <input class="output-input" type="text" id="outputDir"
+                 placeholder="Loading…"
+                 autocomplete="off" spellcheck="false"
+                 title="Directory where .bag files will be saved"/>
+        </div>
         <div class="detect-actions">
           <button class="btn btn-detect" id="detectBtn" onclick="detectCameras()">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
@@ -890,11 +917,14 @@ function updateName(serial, val) {
 function setInputsDisabled(v) {
   document.querySelectorAll('.name-input').forEach(el => el.disabled = v);
   document.getElementById('detectBtn').disabled  = v;
+  const od = document.getElementById('outputDir');
+  if (od) od.disabled = v;
 }
 
 // ── Recording controls ────────────────────────────────────────────────────────
 
 async function startRecording() {
+  const outputDir = document.getElementById('outputDir')?.value.trim() || '';
   const payload = cameras.map(c => ({
     serial:    c.serial,
     user_name: (c.user_name || '').trim() || `cam_${c.serial.slice(-4)}`
@@ -902,11 +932,11 @@ async function startRecording() {
   try {
     const res  = await fetch(`${API}/start_recording`, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ cameras: payload })
+      body: JSON.stringify({ cameras: payload, output_dir: outputDir })
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
-    // UI update comes via SSE — no local state changes needed here
+    log(`Output: ${outputDir || '(default)'}`, 'info');
     _prevDrops = {};
   } catch(e) {
     showToast('Failed to start: ' + e.message);
@@ -938,6 +968,19 @@ function showToast(msg) {
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
+
+// Fetch server's default output directory (~/Documents) and prefill the input.
+fetch(`${API}/config`)
+  .then(r => r.json())
+  .then(d => {
+    const el = document.getElementById('outputDir');
+    if (el && d.default_output_dir) el.placeholder = el.value = d.default_output_dir;
+  })
+  .catch(() => {
+    const el = document.getElementById('outputDir');
+    if (el) el.placeholder = '~/Documents';
+  });
+
 connectSSE();
 detectCameras();
 </script>

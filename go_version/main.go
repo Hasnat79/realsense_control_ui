@@ -665,10 +665,36 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 }
 
 type startRecReq struct {
-	Cameras []struct {
+	OutputDir string `json:"output_dir"` // optional; defaults to ~/Documents
+	Cameras   []struct {
 		Serial   string `json:"serial"`
 		UserName string `json:"user_name"`
 	} `json:"cameras"`
+}
+
+// defaultOutputDir returns ~/Documents, creating it if necessary.
+func defaultOutputDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "recordings"
+	}
+	return filepath.Join(home, "Documents")
+}
+
+// resolveOutputDir cleans and expands the user-supplied path.
+// Empty string → ~/Documents. Relative paths → relative to cwd.
+func resolveOutputDir(raw string) string {
+	if raw == "" {
+		return defaultOutputDir()
+	}
+	// Expand leading ~
+	if raw == "~" || raw[:2] == "~/" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			raw = filepath.Join(home, raw[2:])
+		}
+	}
+	return filepath.Clean(raw)
 }
 
 func handleStartRecording(w http.ResponseWriter, r *http.Request) {
@@ -677,6 +703,13 @@ func handleStartRecording(w http.ResponseWriter, r *http.Request) {
 		writeJSONErr(w, "No cameras configured", 400)
 		return
 	}
+
+	outDir := resolveOutputDir(req.OutputDir)
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		writeJSONErr(w, "Cannot create output directory: "+err.Error(), 400)
+		return
+	}
+	log.Printf("[record] output directory: %s", outDir)
 
 	appState.mu.Lock()
 	if appState.IsRecording {
@@ -711,7 +744,7 @@ func handleStartRecording(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		camID := "cam_" + serial
-		bag := bagFilename(name)
+		bag := bagFilename(outDir, name)
 		bagPaths[camID] = bag
 
 		appState.mu.Lock()
@@ -864,6 +897,12 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+func handleConfig(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]any{
+		"default_output_dir": defaultOutputDir(),
+	})
+}
+
 // ─── SSE broadcaster ──────────────────────────────────────────────────────────
 // All connected /api/events clients receive a pushed JSON event whenever
 // state changes. No polling needed on the frontend.
@@ -992,11 +1031,11 @@ func sourceDir() string {
 	return filepath.Dir(exe)
 }
 
-func bagFilename(camName string) string {
+func bagFilename(baseDir, camName string) string {
 	now := time.Now()
 	day := now.Format("02012006")
 	ts := now.Format("20060102_150405")
-	dir := filepath.Join("recordings", day, camName)
+	dir := filepath.Join(baseDir, day, camName)
 	_ = os.MkdirAll(dir, 0755)
 	return filepath.Join(dir, fmt.Sprintf("%s_%s.bag", camName, ts))
 }
@@ -1016,6 +1055,7 @@ func main() {
 	mux.HandleFunc("POST /api/stop_recording", handleStopRecording)
 	mux.HandleFunc("GET /api/status", handleStatus)
 	mux.HandleFunc("GET /api/events", handleEvents)
+	mux.HandleFunc("GET /api/config", handleConfig)
 	mux.Handle("/", http.FileServer(http.Dir(sourceDir())))
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
