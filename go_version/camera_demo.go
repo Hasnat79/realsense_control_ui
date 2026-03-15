@@ -20,12 +20,21 @@ type PreviewPipeline struct{}
 func NewPreviewPipeline(_ string) (*PreviewPipeline, error) {
 	return nil, errors.New("realsense not available in demo mode")
 }
-func (p *PreviewPipeline) WaitForFrame(_ int) ([]byte, error) { return nil, errors.New("demo") }
-func (p *PreviewPipeline) Close()                              {}
+
+func (p *PreviewPipeline) WaitForFrameInto(_ *[]byte, _ int) ([]byte, error) {
+	return nil, errors.New("demo")
+}
+
+func (p *PreviewPipeline) Close() {}
 
 type Camera struct{}
 
 func NewCamera(_, _ string) (*Camera, error) { return &Camera{}, nil }
-func (c *Camera) Start(_ string) error       { return errors.New("realsense not available in demo mode") }
-func (c *Camera) GrabFrame(_ int) ([]byte, error) { return nil, errors.New("demo") }
-func (c *Camera) Stop()                           {}
+
+func (c *Camera) Start(_ string) error { return errors.New("realsense not available in demo mode") }
+
+func (c *Camera) GrabFrameInto(_ *[]byte, _ int) (width, height, stride int, err error) {
+	return 0, 0, 0, errors.New("demo")
+}
+
+func (c *Camera) Stop() {}

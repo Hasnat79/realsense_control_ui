@@ -1,9 +1,9 @@
 //go:build !demo
 
 // camera.go — CGO bridge to librealsense2
-// Build requires: librealsense2-dev, libopencv-dev
-// Install: sudo apt install librealsense2-dev libopencv-dev
-//          brew install librealsense opencv   (macOS)
+// Build requires: librealsense2-dev
+// Install: sudo apt install librealsense2-dev
+//          brew install librealsense   (macOS)
 
 package main
 
@@ -41,14 +41,16 @@ static int list_devices(rs_dev_info_t* out, int max_n) {
     return n;
 }
 
-// ── shared frame grab helper ─────────────────────────────────────────────────
-// Copies the latest color frame into a malloc'd buffer. Caller must free().
-static void* grab_color(rs2_pipeline* pipe, int timeout_ms,
-                        int* w, int* h, int* stride) {
+// ── shared frame grab — writes into caller-supplied buffer (zero malloc) ────
+// Returns 1 on success, 0 on timeout/error.
+// buf must be at least stride*h bytes. w/h/stride are set on success.
+static int grab_color_into(rs2_pipeline* pipe, int timeout_ms,
+                           unsigned char* buf, int buf_len,
+                           int* w, int* h, int* stride) {
     rs2_error* e = NULL;
     rs2_frame* frames = rs2_pipeline_wait_for_frames(pipe, timeout_ms, &e);
-    if (e) { rs2_free_error(e); return NULL; }
-    void* data = NULL;
+    if (e) { rs2_free_error(e); return 0; }
+    int found = 0;
     int n = rs2_embedded_frames_count(frames, &e);
     for (int i = 0; i < n; i++) {
         rs2_frame* f = rs2_extract_frame(frames, i, &e);
@@ -56,18 +58,21 @@ static void* grab_color(rs2_pipeline* pipe, int timeout_ms,
             (rs2_stream_profile*)rs2_get_frame_stream_profile(f, &e);
         rs2_stream s; rs2_format fmt; int idx, uid, fps;
         rs2_get_stream_profile_data(p, &s, &fmt, &idx, &uid, &fps, &e);
-        if (s == RS2_STREAM_COLOR && data == NULL) {
-            *w      = rs2_get_frame_width(f, &e);
-            *h      = rs2_get_frame_height(f, &e);
-            *stride = rs2_get_frame_stride_in_bytes(f, &e);
-            int sz  = (*stride) * (*h);
-            data    = malloc(sz);
-            if (data) memcpy(data, rs2_get_frame_data(f, &e), sz);
+        if (s == RS2_STREAM_COLOR && !found) {
+            int fw     = rs2_get_frame_width(f, &e);
+            int fh     = rs2_get_frame_height(f, &e);
+            int fstride = rs2_get_frame_stride_in_bytes(f, &e);
+            int sz     = fstride * fh;
+            if (sz <= buf_len) {
+                memcpy(buf, rs2_get_frame_data(f, &e), sz);
+                *w = fw; *h = fh; *stride = fstride;
+                found = 1;
+            }
         }
         rs2_release_frame(f);
     }
     rs2_release_frame(frames);
-    return data;
+    return found;
 }
 
 // ── preview pipeline ─────────────────────────────────────────────────────────
@@ -92,9 +97,10 @@ static preview_pipe_t* preview_open(const char* serial) {
     return pp;
 }
 
-static void* preview_grab(preview_pipe_t* pp, int timeout_ms,
-                          int* w, int* h, int* stride) {
-    return grab_color(pp->pipe, timeout_ms, w, h, stride);
+static int preview_grab_into(preview_pipe_t* pp, int timeout_ms,
+                              unsigned char* buf, int buf_len,
+                              int* w, int* h, int* stride) {
+    return grab_color_into(pp->pipe, timeout_ms, buf, buf_len, w, h, stride);
 }
 
 static void preview_close(preview_pipe_t* pp) {
@@ -132,9 +138,10 @@ static rec_pipe_t* rec_open(const char* serial, const char* bag_path) {
     return rp;
 }
 
-static void* rec_grab(rec_pipe_t* rp, int timeout_ms,
-                      int* w, int* h, int* stride) {
-    return grab_color(rp->pipe, timeout_ms, w, h, stride);
+static int rec_grab_into(rec_pipe_t* rp, int timeout_ms,
+                         unsigned char* buf, int buf_len,
+                         int* w, int* h, int* stride) {
+    return grab_color_into(rp->pipe, timeout_ms, buf, buf_len, w, h, stride);
 }
 
 static void rec_close(rec_pipe_t* rp) {
@@ -188,17 +195,22 @@ func NewPreviewPipeline(serial string) (*PreviewPipeline, error) {
 	return &PreviewPipeline{ptr: ptr}, nil
 }
 
-func (p *PreviewPipeline) WaitForFrame(timeoutMS int) ([]byte, error) {
+// WaitForFrameInto writes the color frame directly into the caller-supplied
+// buffer (no malloc inside CGO). Returns the populated sub-slice or error.
+func (p *PreviewPipeline) WaitForFrameInto(bufPtr *[]byte, timeoutMS int) ([]byte, error) {
+	buf := *bufPtr
 	var w, h, stride C.int
-	data := C.preview_grab(p.ptr, C.int(timeoutMS), &w, &h, &stride)
-	if data == nil {
-		return nil, errors.New("timeout")
+	ok := C.preview_grab_into(
+		p.ptr,
+		C.int(timeoutMS),
+		(*C.uchar)(unsafe.Pointer(&buf[0])),
+		C.int(len(buf)),
+		&w, &h, &stride,
+	)
+	if ok == 0 {
+		return nil, errors.New("timeout or no color frame")
 	}
-	defer C.free(data)
-	sz := int(stride) * int(h)
-	buf := make([]byte, sz)
-	copy(buf, unsafe.Slice((*byte)(data), sz))
-	return buf, nil
+	return buf[:int(stride)*int(h)], nil
 }
 
 func (p *PreviewPipeline) Close() { C.preview_close(p.ptr) }
@@ -226,17 +238,23 @@ func (c *Camera) Start(bagPath string) error {
 	return nil
 }
 
-func (c *Camera) GrabFrame(timeoutMS int) ([]byte, error) {
-	var w, h, stride C.int
-	data := C.rec_grab(c.ptr, C.int(timeoutMS), &w, &h, &stride)
-	if data == nil {
-		return nil, errors.New("frame timeout")
+// GrabFrameInto writes the color frame directly into the caller-supplied
+// buffer. Returns width, height, stride and nil error on success.
+// The .bag file is written by librealsense2 regardless of this call's result.
+func (c *Camera) GrabFrameInto(bufPtr *[]byte, timeoutMS int) (width, height, stride int, err error) {
+	buf := *bufPtr
+	var w, h, st C.int
+	ok := C.rec_grab_into(
+		c.ptr,
+		C.int(timeoutMS),
+		(*C.uchar)(unsafe.Pointer(&buf[0])),
+		C.int(len(buf)),
+		&w, &h, &st,
+	)
+	if ok == 0 {
+		return 0, 0, 0, errors.New("frame timeout")
 	}
-	defer C.free(data)
-	sz := int(stride) * int(h)
-	buf := make([]byte, sz)
-	copy(buf, unsafe.Slice((*byte)(data), sz))
-	return buf, nil
+	return int(w), int(h), int(st), nil
 }
 
 func (c *Camera) Stop() {
